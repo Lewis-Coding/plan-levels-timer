@@ -1,0 +1,44 @@
+name: start the plan runs
+
+on:
+  schedule:
+    # GC block: tries at 07:40, 07:48 and 07:55 London (both lines cover UK winter and summer time)
+    - cron: "40,48,55 6,7 * * 1-5"
+    # NQ block: tries at 08:35, 08:45 and 08:52 New York (the private run waits until 08:58 and sends at ~13:58 UK)
+    - cron: "35,45,52 12,13 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: start the private run if it is time (on a manual run, only check the token)
+        env:
+          TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          REPO: Lewis-Coding/plan-levels
+        run: |
+          api() { curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$@"; }
+          if [ -z "$TOKEN" ]; then echo "DISPATCH_TOKEN secret is missing"; exit 1; fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            code=$(api "https://api.github.com/repos/$REPO/actions/workflows/gc.yml")
+            echo "token check: GitHub answered $code (200 = the token can see the private workflows)"; [ "$code" = "200" ]; exit $?
+          fi
+          lon=$(TZ=Europe/London date +%H%M); ny=$(TZ=America/New_York date +%H%M); wf=""
+          if [ "$lon" -ge 730 ] && [ "$lon" -lt 800 ]; then wf=gc.yml; fi
+          if [ "$ny" -ge 820 ] && [ "$ny" -lt 930 ]; then wf=plan.yml; fi
+          echo "London $lon, New York $ny -> ${wf:-nothing to start}"
+          if [ -n "$wf" ]; then
+            code=$(api -X POST "https://api.github.com/repos/$REPO/actions/workflows/$wf/dispatches" -d '{"ref":"main","inputs":{"test":"false"}}')
+            echo "start $wf: GitHub answered $code (204 = started; the private run sends once a day and skips repeats)"
+            [ "$code" = "204" ] || exit 1
+          fi
+      - name: keep this schedule alive (GitHub pauses schedules in public repos after 60 quiet days)
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(date -u +%u)" = "1" ]; then gh api -X PUT "repos/${{ github.repository }}/actions/workflows/trigger.yml/enable" && echo "re-enabled"; fi
