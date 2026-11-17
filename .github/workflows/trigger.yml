@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: start the private run if it is time (on a manual run, only check the token)
+      - name: start the private run if it is time (a manual run checks the token can read and start)
         env:
           TOKEN: ${{ secrets.DISPATCH_TOKEN }}
           REPO: Lewis-Coding/plan-levels
@@ -25,7 +25,11 @@ jobs:
           if [ -z "$TOKEN" ]; then echo "DISPATCH_TOKEN secret is missing"; exit 1; fi
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             code=$(api "https://api.github.com/repos/$REPO/actions/workflows/gc.yml")
-            echo "token check: GitHub answered $code (200 = the token can see the private workflows)"; [ "$code" = "200" ]; exit $?
+            echo "read check: GitHub answered $code (200 = the token can see the private workflows)"
+            [ "$code" = "200" ] || exit 1
+            code=$(api -X POST "https://api.github.com/repos/$REPO/actions/workflows/gc.yml/dispatches" -d '{"ref":"main","inputs":{"test":"false"}}')
+            echo "start check: GitHub answered $code (204 = can start runs; outside 07:30-08:00 UK, or once today's GC block is sent, the private run just skips)"
+            [ "$code" = "204" ]; exit $?
           fi
           lon=$(TZ=Europe/London date +%H%M); ny=$(TZ=America/New_York date +%H%M); wf=""
           if [ "$lon" -ge 730 ] && [ "$lon" -lt 800 ]; then wf=gc.yml; fi
